@@ -1,0 +1,37 @@
+function Q = mtimes(A,B)
+
+if strcmp(class(A),'nuFTOperator')
+    if A.adjoint
+        Q = zeros(size(A));
+        for k=1:A.numCoils
+            Q = Q + nufft_adj(B((k-1)*A.trajectory_length+1:k*A.trajectory_length), A.nufftStruct) .* conj(A.sensmaps{k});
+        end
+        Q = Q / sqrt(prod(A.imageDim));
+        
+%         Xk = reshape(A.nufftStruct.p'*reshape(B,[],A.numCoils),[A.nufftStruct.Kd A.numCoils]);
+%         x = prod(A.nufftStruct.Kd)*ifft(ifft(ifft(Xk,[],3),[],2),[],1);
+%         if any(A.nufftStruct.Nd<A.nufftStruct.Kd)
+%             x = x(1:A.nufftStruct.Nd(1),1:A.nufftStruct.Nd(2),1:A.nufftStruct.Nd(3),:);
+%         end
+%         x = x.*A.sensmaps_scale_adj;
+%         Q = sum(x,4)/sqrt(prod(A.imageDim));
+    else
+        Q = zeros(A.trajectory_length*A.numCoils, 1);
+        for k=1:A.numCoils
+            Q((k-1)*A.trajectory_length+1:k*A.trajectory_length) = nufft((B.*A.sensmaps{k}), A.nufftStruct);
+        end
+        Q = Q / sqrt(prod(A.imageDim));
+
+%         x = B(:,:,:,ones(A.numCoils,1)).*A.sensmaps_scale;
+%         Xk = reshape(fft(fft(fft(x,A.nufftStruct.Kd(3),3),A.nufftStruct.Kd(2),2),A.nufftStruct.Kd(1),1),[],A.numCoils);
+%       	Q = col(A.nufftStruct.p * Xk) / sqrt(prod(A.imageDim));
+    end
+    
+% now B is the operator and A is the vector
+elseif strcmp(class(B),'nuFTOperator')
+    Q = mtimes(B',A')';
+else
+   error('nuFTOperator:mtimes', 'Neither A nor B is of class nuFTOperator');
+end
+    
+end

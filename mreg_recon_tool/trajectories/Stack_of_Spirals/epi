@@ -1,0 +1,191 @@
+function T = wave(fov,resolution)
+
+%% usage: T = stack_of_spirals(R,Nradial,Nz,fov,resolution, pf)
+% Needs the toolbox of Benni Zahneisen
+
+%% INPUT:
+% R = reduction factor: [Rrad_min Rrad_max Rz_min Rz_max]
+%   to set FOV_z smaller simply increas Rz
+% Nradial: interleaves in radial direction
+% Nz:      interleavs in z - direction
+% fov in m: It is set isotropic but can be made unisotropic by changing R
+% resolution in m: (!!! This definition is different to Benni's shells !!!)
+%           This is only implemented for isotropic resolution but could 
+%           easily be made unisotropic by changing kz_max
+% pf:       Partial Fourier factor. If you don't want to use partial
+%           fourier, use one or leave empty. 0.5 is half Fourier, 1 is full
+%           sampling etc. K-space is cut of at the beginning.
+% alt_order: If 1, the aquisition direction in z is alternated every other
+%            step. Otherwise choose 0 or leave empty.
+
+%% OUTPUT:
+% T: Trajectory struct (defined in Benni's toolbox)
+
+% Jakob Asslaender August 2011
+
+gamma=4258*1e4;
+s=fov./resolution;
+slew_max = 230;
+SYSTEM=GradSystemStructure('custom', [], slew_max);
+kmax=1./(resolution*2)/pi;
+
+%% Create all single spirals
+nz=5;
+
+ny=1:2:s(2);
+for i=1:length(ny)
+    kyz(i,1)=ny(i)-(floor(s(2)/2)+1);
+    kyz(i,2)=mod(floor((kyz(i,1)+1)/2)+(floor(nz/2))-1,nz)-(floor(nz/2));
+end
+nn=zeros(1,nz);
+for i=1:length(ny)
+    for j=1:nz
+        if kyz(i,2)==j-floor(nz/2)-1
+            nn(j)=nn(j)+1;
+            kyz_temp{j}(nn(j),:)=kyz(i,:);
+        end
+    end
+end
+
+% ny=1:s(2);
+% for i=1:length(ny)
+%     kyz(i,1)=ny(i)-(floor(s(2)/2)+1);
+%     kyz(i,2)=mod(kyz(i,1)+(floor(nz/2))-1,nz)-(floor(nz/2));
+% end
+% nn=zeros(1,nz);
+% for i=1:length(ny)
+%     for j=1:nz
+%         if kyz(i,2)==j-floor(nz/2)-1
+%             nn(j)=nn(j)+1;
+%             kyz_temp{j}(nn(j),:)=kyz(i,:);
+%         end
+%     end
+% end
+
+for j=1:nz
+    if j==1
+        kyz=kyz_temp{j};
+    else
+        if mod(j,2)==1
+            kyz=[kyz;kyz_temp{j}];
+        else
+            kyz=[kyz;kyz_temp{j}(end:-1:1,:)];
+        end
+    end
+end
+kyz(:,1)=kyz(:,1)/max(abs(kyz(:,1)));
+kyz(:,2)=kyz(:,2)/max(abs(kyz(:,2)));
+
+clear k
+for ty=1:length(ny)
+%     for tx=0:floor(s(1)/2)-1
+%         k(tx+1,1)=(tx/floor(s(1)/2)-0.5)*2*pi*(-1)^ty;
+%     end
+    for tx=0:s(1)-1
+        k(tx+1,1)=(tx/s(1)-0.5)*2*pi*(-1)^ty;
+    end
+    k(:,2)=kyz(ty,1)*pi;
+    k(:,3)=kyz(ty,2)*pi;
+    
+    if ty==1
+        axis=[0;kyz(1,1)] + 1i * [0;(kyz(1,2))];
+    else
+        axis=kyz(ty-1:ty,1) + 1i * (kyz(ty-1:ty,2));
+    end
+
+    for i=1:length(k)
+        dk(i)=pi/18*exp(-1i*k(i,1)*2.1*(-1)^ty);
+    end
+    k_c=k(:,2)+1i*k(:,3)+dk';
+    first=k_c(1:2);
+    alpha =  angle(diff(axis,1,1))-angle(diff(first,1,1));
+    for i=1:length(k)
+        dk(i)=pi/18*exp(-1i*k(i,1)*2.1*(-1)^ty-1i*alpha);
+    end
+    k_c=k(:,2)+1i*k(:,3)+dk';
+    
+    if ty==length(ny)
+        axis2=[kyz(end,1);0] + 1i * [kyz(end,2);0];
+        for i=1:length(k)
+            last1=k_c(end-i:end-i+1);
+            alpha1 =  angle(diff(axis2,1,1))-angle(diff(last1,1,1));
+            last2=k_c(end-i-1:end-i);
+            alpha2 =  angle(diff(axis2,1,1))-angle(diff(last2,1,1));
+            if  (alpha1*alpha2>-5 && alpha1*alpha2<=0) | abs(alpha1)<0.5
+                k_c=k_c(1:end-i);
+                break;
+            end
+        end
+    else
+        axis2=kyz(ty:ty+1,1) + 1i * (kyz(ty:ty+1,2));
+        for i=1:length(k)
+            last1=k_c(end-i:end-i+1);
+            alpha1 =  angle(diff(axis2,1,1))-angle(diff(last1,1,1));
+            last2=k_c(end-i-1:end-i);
+            alpha2 =  angle(diff(axis2,1,1))-angle(diff(last2,1,1));
+            if  (alpha1*alpha2>-5 && alpha1*alpha2<=0) | abs(alpha1)<0.5
+                k_c=k_c(1:end-i);
+                break;
+            end
+        end
+    end
+    
+    k=k(1:length(k_c),:);
+    k(:,2)=real(k_c);
+    k(:,3)=imag(k_c);
+    
+    k(:,1)=k(:,1)*kmax(1);
+    k(:,2)=k(:,2)*kmax(2);
+    k(:,3)=k(:,3)*kmax(3);
+    g = 1/gamma*(k(2:end,:)-k(1:end-1,:))/1e-5;
+
+    T(ty) = trajectStruct_init(k,g,SYSTEM);
+    clear k g k_c
+end
+% for tx=0:s(1)-1
+%     k(tx+1,1)=(tx/s(1)-0.5)*2*pi*(-1)^(ty+1);
+% end
+% k(:,2)=0;k(:,3)=0;
+% k(:,1)=k(:,1)*kmax(1);
+% k(:,2)=k(:,2)*kmax(2);
+% k(:,3)=k(:,3)*kmax(3);
+% g = 1/gamma*(k(2:end,:)-k(1:end-1,:))/1e-5;
+% T(ty+1) = trajectStruct_init(k,g,SYSTEM);
+
+
+% ramp up first element
+temp = T(1);
+T(1) = trajectStruct_rampUp(T(1));
+T(1).index(1) = length(T(1).G) - length(temp.G);
+
+%% connect elements by bending the endings ('rip' mode).
+Tc = T(1);
+for element=2:size(T, 2)
+    Tc = trajectStruct_connect(Tc,T(element),'rip');element
+end
+                
+display('...elements connected')
+T =Tc(:);
+
+% raup down last element
+for k=1:length(T)
+    T(k).index(2) = length(T(k).G);
+    T(k)=trajectStruct_rampDown(T(k));
+    
+end
+
+
+%% return information for trajectStruct_export
+for i=1:length(T)
+    T(i).fov    = fov;
+    T(i).N      = fov./s;
+    % The 200 makes sure that not beginning of the trajectory (which usually is in the k-space center) does not count as TE
+    [~, te]    = min(makesos(T(i).K(200:end-200,:), 2));  % The Echotime of the first trajectory is taken. Hopefully they are all similar...
+    T(i).TE    = (te + 200) * 10; % [us]
+end
+
+% T.K = [T.K(:,2), T.K(:,3), T.K(:,1)];
+% T.G = [T.G(:,2), T.G(:,3), T.G(:,1)];
+
+
+display('finished')

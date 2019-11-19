@@ -1,0 +1,127 @@
+function  A = orc_segm_nuFTOperator(trajectory, imageDim, sensmaps, phasemap, dwelltime, Ns, DeltaT)
+
+% function  A = orc_segm_nuFTOperator(trajectory, imageDim, sensmaps, phasemap, dwelltime, Ns, DeltaT)
+%
+% imageDim   = [#rows #columns] = [Nr Nc], of the image
+% trajectory = Nt x 2 = arbitrary trajectory in 2D k-space
+% sensmaps   = Nr x Nc x #coils
+% phasemap   = offresonance map in rads/s
+% dwelltime  = time between k-space samples
+% Ns         = number of segments
+% DeltaT     = GE: DeltaT = t(beginning of trajectory) - t(excitation); positive
+%              SE: DeltaT = t(echo) - t(beginning of trajectory); negative
+%
+% 30.09.2011
+% Thimo Hugger
+
+
+if isempty(sensmaps)
+    s.numCoils = 1;
+else
+    if size(trajectory,2) == 3 && length(size(sensmaps))== 4
+        s.numCoils = size(sensmaps, length(size(sensmaps)));
+    end
+    if size(trajectory,2) == 3 && length(size(sensmaps))== 3
+        s.numCoils = 1;
+    end
+    if size(trajectory,2) == 2 && length(size(sensmaps))== 3
+        s.numCoils = size(sensmaps, length(size(sensmaps)));
+    end
+    if size(trajectory,2) == 2 && length(size(sensmaps))== 2
+        s.numCoils = 1;
+    end
+end
+
+s.imageDim = imageDim;
+s.adjoint = 0;
+tl = size(trajectory,1);
+s.trajectory_length = tl;
+if size(trajectory,2) == 3
+    s.nufftNeighbors = [5 5 5];
+else
+    s.nufftNeighbors = [5 5];
+end
+% s.phasemap = phasemap;
+s.tADC = tl*dwelltime;
+s.oversampling = s.imageDim;
+
+s.nSegments = Ns;
+sr = floor((tl-Ns-1)/Ns);
+sl = 2*sr + 1;
+
+si = cell(1,Ns+1);
+si{1} = 1:sr+1;
+for k=1:Ns-1
+    si{k+1} = k*(sr+1)+1-sr:k*(sr+1)+1+sr;
+end
+si{end} = Ns*(sr+1)+1-sr:tl;
+s.segment_index = si;
+
+h = hann(sl+2);
+h = h(2:end-1);
+ipf = cell(1,Ns+1);
+ipf{1} = h(sr+1:end);
+for k=1:Ns-1
+    ipf{k+1} = h;
+end
+ipf{end} = [h(1:sr);ones(length(si{end})-sr,1)];  %the remaining datapoints are not included in the interpolation and are therefore set to the last segment only. This is an approximation.
+s.segment_filter = ipf;
+
+T = s.tADC * [0:tl-1]/tl;
+t = zeros(1,Ns+1);
+t(1) = 0;
+for k=1:Ns
+    t(k+1) = T(k*(sr+1)+1);
+end
+
+if nargin > 6 && ~isempty(DeltaT)
+    t = t + DeltaT;
+end
+
+if size(trajectory,2) == 3
+    for k = 1:Ns+1
+        s.phasemap(:,:,:,k) = exp(1i*phasemap*t(k));
+    end
+else
+    for k = 1:Ns+1
+        s.phasemap(:,:,k) = exp(1i*phasemap*t(k));
+    end
+end
+
+
+
+if isempty(sensmaps)
+    s.sensmaps{1} = 1;
+else
+    for k=1:s.numCoils
+        if size(trajectory,2) == 3
+            if s.numCoils > 1
+            s.sensmaps{k} = sensmaps(:,:,:,k);
+            else
+            s.sensmaps{1}=sensmaps;
+            end
+        else
+             s.sensmaps{k} = sensmaps(:,:,k);
+        end
+    end
+end
+
+if size(trajectory,2) == 3
+    trajectory = [trajectory(:,2), -trajectory(:,1) , trajectory(:,3)];
+else
+    trajectory = [trajectory(:,2), -trajectory(:,1)];
+end
+for k=1:Ns+1
+    nstr = nufft_init(trajectory(si{k},:), s.imageDim, s.nufftNeighbors, s.oversampling, s.imageDim/2, 'kaiser');
+    s.interpolation_matrix{k} = nstr.p.arg.G;
+    s.interp_filter{k} = spdiags(s.segment_filter{k},-s.segment_index{k}(1)+1,tl,length(s.segment_index{k}))*nstr.p.arg.G;
+end
+s.scaling_factor = nstr.sn; % is the same each time
+
+s.sensmaps_scale = bsxfun(@times,s.scaling_factor,sensmaps);
+s.phasemap_coils = cell(length(s.segment_index),1);
+for k=1:length(s.segment_index)
+    s.phasemap_coils{k} = repmat(s.phasemap(:,:,:,k),[1 1 1 s.numCoils]);
+end
+
+A = class(s,'orc_segm_nuFTOperator');
